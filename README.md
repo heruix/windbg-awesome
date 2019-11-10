@@ -7,3 +7,4 @@
 
   *[dump analysis](http://www.dumpanalysis.org/) 
 
+  *[Writing debugger type visualizers for C++ using .natvis files](https://code.msdn.microsoft.com/windowsdesktop/Writing-type-visualizers-2eae77a2)
