@@ -8,3 +8,5 @@
   *[dump analysis](http://www.dumpanalysis.org/) 
 
   *[Writing debugger type visualizers for C++ using .natvis files](https://code.msdn.microsoft.com/windowsdesktop/Writing-type-visualizers-2eae77a2)
+ 
+ *[JavaScript bridge makes malware analysis with WinDbg easier](https://blog.talosintelligence.com/2019/02/windbg-malware-analysis-with-javascript.html)
