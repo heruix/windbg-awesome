@@ -1,0 +1,253 @@
+In case you’ve missed it, there are tons of changes going on under the covers in WinDbg. There is a fundamental paradigm shift going on in terms of how WinDbg grants access and presents data to the user and it can lead to some pretty cool results.
+Let’s take a concrete example of the old way versus the new way. Say you want to look up every process in the system. In the old way, you would run the following command:
+!process 0 0
+This gives you some nice output that lists the processes in the system:
+!process 0 0
+**** NT ACTIVE PROCESS DUMP ****
+PROCESS ffff8e018de56040
+    SessionId: none  Cid: 0004    Peb: 00000000  ParentCid: 0000
+    DirBase: 001aa000  ObjectTable: ffffbb8ca0e012c0  HandleCount: 2040.
+    Image: System
+
+PROCESS ffff8e018e1b27c0
+    SessionId: none  Cid: 020c    Peb: 7126d5e000  ParentCid: 0004
+    DirBase: 0673c000  ObjectTable: ffffbb8ca1d72440  HandleCount:  52.
+    Image: smss.exe
+Cool. But, what if I want to know more about the processes? For example, maybe I want to see every thread in every process. Off to the documentation I go to see if there’s a flag specific to this command that I can pass to get the details I want. In this case I can pass “2” and I get to see some thread details:
+!process 0 2
+ **** NT ACTIVE PROCESS DUMP ****
+ PROCESS ffff8e018de56040
+ SessionId: none  Cid: 0004    Peb: 00000000  ParentCid: 0000
+ DirBase: 001aa000  ObjectTable: ffffbb8ca0e012c0  HandleCount: 2040.
+ Image: System
+
+THREAD ffff8e018de5d5c0  Cid 0004.000c  Teb: 0000000000000000 Win32Thread: 0000000000000000 WAIT: (Executive) KernelMode Non-Alertable
+ fffff800e11c42a0  SynchronizationEvent
+
+THREAD ffff8e018de5f4c0  Cid 0004.0010  Teb: 0000000000000000 Win32Thread: 0000000000000000 WAIT: (Executive) KernelMode Non-Alertable
+ fffff800e11c5180  Semaphore Limit 0x7fffffff
+Excellent! OK, now I want to know which threads are impersonating…Womp, womp. Sorry, there’s not a flag for that. Even worse, my choices for getting this information kind of suck at this point: I can write my own debugger extension or I can write my own Debugger Command Program using the WinDbg scripting language (ha!).
+Enter the world of the debugger object model. Instead of running a command that will list the processes in the system, the debugger provides access to an array of objects that represent each process in the system. You can dump this array using the dx command:
+dx -r2 Debugger.Sessions[0].Processes
+    [0x0]            : 
+        KernelObject     [Type: _EPROCESS]
+        Name             : Unknown Image
+        Id               : 0x0
+        Threads         
+        Modules         
+        Environment     
+        Io              
+    [0x4]            : 
+        KernelObject     [Type: _EPROCESS]
+        Name             : Unknown Image
+        Id               : 0x4
+        Threads         
+        Modules         
+        Environment     
+        Io              
+    [0x20c]          : smss.exe
+        KernelObject     [Type: _EPROCESS]
+        Name             : smss.exe
+        Id               : 0x20c
+        Threads         
+        Modules         
+        Environment     
+        Io
+Note that each object has several properties, including a property that gives us access to all of the threads within the process (Threads). So, if I want to see all of the threads in the processes I can perform a LINQ query and ask for all threads in all processes:
+dx -r2 Debugger.Sessions[0].Processes.Select(p => p.Threads)
+    [0x0]           
+        [0x0]            : nt!DbgBreakPointWithStatus (fffff800`e0feea40) 
+    [0x4]           
+        [0xc]            : nt!KiSwapContext+0x76 (fffff800`e0fede06) 
+        [0x10]           : nt!KiSwapContext+0x76 (fffff800`e0fede06) 
+        [0x14]           : nt!KiSwapContext+0x76 (fffff800`e0fede06) 
+        [0x18]           : nt!KiSwapContext+0x76 (fffff800`e0fede06) 
+        [0x1c]           : nt!KiSwapContext+0x76 (fffff800`e0fede06) 
+        [0x20]           : nt!KiSwapContext+0x76 (fffff800`e0fede06) 
+        [0x24]           : nt!KiSwapContext+0x76 (fffff800`e0fede06) 
+        [0x28]           : nt!KiSwapContext+0x76 (fffff800`e0fede06)
+OK, I admit that wasn’t intuitively obvious to ME, but now we’ll get to see why this is cool…
+Back to my original issue of needing only threads that are impersonating, I can do another LINQ query to filter to only the threads that are impersonating. I’ll base this on a property of the ETHREAD kernel object that is part of each thread debugger object:
+dx -r2 Debugger.Sessions[0].Processes.Select(p => p.Threads.Where(t => t.KernelObject.ActiveImpersonationInfo != 0))
+...
+    [0x3d8]         
+    [0x424]         
+    [0x42c]         
+    [0x460]         
+        [0x830]          : nt!KiSwapContext+0x76 (fffff800`e0fede06) 
+        [0xf30]          : nt!KiSwapContext+0x76 (fffff800`e0fede06) 
+    [0x468]         
+    [0x494]         
+    [0x4dc]         
+Again I will agree that this isn’t intuitively obvious, but it’s pretty cool and provides a new way to navigate crash dump files.
+Another cool feature of debugger objects is that they’re also exposed via JavaScript. So, instead of writing a debugger extension in C++ to list all the processes in the system, you can write some JavaScript instead:
+//
+// ListProcs.js
+//
+// Walk the current list of processes
+//
+// OSR Open Systems Resources, inc.
+//
+// http://www.osr.com
+// http://www.osronline.com
+//
+//
+// To run:
+//  
+//   .load jsprovider.dll
+//   .scriptload ListProcs.js
+//   dx Debugger.State.Scripts.ListProcs.Contents.ListProcs()
+//
+function ListProcs() {
+
+    // Get easy access to the debug output method
+    var dbgOutput = host.diagnostics.debugLog;
+
+    dbgOutput("List Processes!\n\n");
+
+    var processes = host.currentSession.Processes;
+
+    for (var process of processes)
+    {
+        dbgOutput("Found Process:\n");
+        dbgOutput("\tName : ", process.Name, "\n");
+        dbgOutput("\tId   : ", process.Id, "\n");
+    }
+
+}
+To run the command just save it in a .js file and perform the following steps:
+
+.load jsprovider.dll
+.scriptload ListProcs.js
+dx Debugger.State.Scripts.ListProcs.Contents.ListProcs()
+
+List Processes!
+Found Process:
+ Name : Unknown Image
+ Id   : 0x0
+Found Process:
+ Name : Unknown Image
+ Id   : 0x4
+Found Process:
+ Name : smss.exe
+ Id   : 0x20c
+Pretty neat!
+
+To provide another example, we had a question on our WinDbg forum about how you might find all of the active file handles to a particular device object. In the old way this would be quite painful. You’d end up running the following command:
+
+!handle 0 3 0 File
+And searching the output for the address that you’re interested in.
+
+In the new way, each debugger process object has a property that returns you an array of the handles in the process. With a bit of JavaScript we can use this data to find the file objects that reference our device object:
+
+//
+// FindDevHandle.js
+//
+// Walk the current list of processes and look for a handle to a file object
+// that is accessing the specified device
+//
+// OSR Open Systems Resources, inc.
+//
+// http://www.osr.com
+// http://www.osronline.com
+//
+//
+// To run:
+//  
+//   .load jsprovider.dll
+//   .scriptload FindDevHandle.js
+//   dx Debugger.State.Scripts.FindDevHandle.Contents.FindDevHandle(0x12345678)
+//
+function FindDevHandle(devObjParam) {
+ 
+    // Get easy access to the debug output method
+    var dbgOutput = host.diagnostics.debugLog;
+ 
+    // Get a typed device object for the incoming parameter
+    var devObj = host.createTypedObject(devObjParam, "nt", "_DEVICE_OBJECT");
+ 
+    dbgOutput("Finding handle to device ", devObj.targetLocation, "!\n\n");
+ 
+    // Loop over each process
+    var processes = host.currentSession.Processes;
+ 
+    for (var process of processes) {
+ 
+        dbgOutput("Process ", process.Name, "\n");
+ 
+        // And each handle in every process
+        var handles = process.Io.Handles;
+ 
+        // Note that an exception can be raised while looping over the handles
+        // (e.g. an empty handle table)
+        try {
+ 
+            for (var handle of handles) {
+ 
+                // NOTE: We just treat every handle like it's a file handle
+                // and catch exceptions along the way. A better idea would
+                // be to key off of the type, but that appears to be broken
+                // with public PDBs at the moment
+                try {
+ 
+                    // Cast the object to a file object
+                    var fileObj = host.createTypedObject(handle.Object.Body.targetLocation, "nt", "_FILE_OBJECT");
+ 
+                    // Dereference the DeviceObject field and get the target location
+                    if (fileObj.DeviceObject.dereference().targetLocation == devObj.targetLocation) {
+ 
+                        dbgOutput("\tFound one!\n");
+                        dbgOutput("\t PID    : ", process.Id, "\n");
+                        dbgOutput("\t Name   : ", process.Name, "\n");
+                        dbgOutput("\t Handle : ", handle.Handle, "\n");
+                        dbgOutput("\t Object : ", fileObj.targetLocation, "\n\n");
+                    }
+                   
+                } catch (e) {
+ 
+                    dbgOutput("\tException parsing handle!\n");
+ 
+                }
+ 
+            }
+ 
+        } catch (e) {
+ 
+            dbgOutput("\tException parsing handle table!\n");
+ 
+        }
+ 
+    }
+ 
+}
+Example of the results:
+dx Debugger.State.Scripts.FindDevHandle.Contents.FindDevHandle(0xffff8e018f704140)
+
+Finding handle to device 0xffff8e018f704140!
+...
+Process SearchFilterHost.exe
+Process audiodg.exe
+Process OSRLOADER.exe
+Process NothingTest.exe
+    Found one!
+     PID    : 0x1300
+     Name   : NothingTest.exe
+     Handle : 0x9c
+     Object : 0xffff8e018e619690
+
+I’ve glossed over a lot of things in that script and we’ll certainly be writing more about all of this in the future, but in the meantime there’s some interesting documentation available on MSDN:
+
+dx command:
+https://msdn.microsoft.com/en-us/library/windows/hardware/dn936815(v=vs.85).aspx
+
+Writing LINQ queries in WinDbg
+https://blogs.msdn.microsoft.com/windbg/2016/10/03/writing-linq-queries-in-windbg/
+
+JavaScript Debugger Example Scripts
+https://msdn.microsoft.com/en-us/library/windows/hardware/mt790252(v=vs.85).aspx
+
+Native Debugger Objects in JavaScript Extensions
+https://msdn.microsoft.com/en-us/library/windows/hardware/mt790254(v=vs.85).aspx
+
+ Defrag Tools #170 – Debugger – JavaScript Scripting
+https://channel9.msdn.com/Shows/Defrag-Tools/Defrag-Tools-170-Debugger-JavaScript-Scripting
