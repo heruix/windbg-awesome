@@ -12,3 +12,5 @@
  *[JavaScript bridge makes malware analysis with WinDbg easier](https://blog.talosintelligence.com/2019/02/windbg-malware-analysis-with-javascript.html)
  
 *[Debugger Data Model C++ Overview](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/data-model-cpp-overview)
+
+*[windbg sample scripts](https://github.com/microsoft/WinDbg-Samples)
