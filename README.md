@@ -14,3 +14,5 @@
 *[Debugger Data Model C++ Overview](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/data-model-cpp-overview)
 
 *[windbg sample scripts](https://github.com/microsoft/WinDbg-Samples)
+
+*[windbginfo](https://github.com/abarbatei/windbg-info)
